@@ -67,14 +67,38 @@ class S(BaseHTTPRequestHandler):
         with open(writepath, mode) as f:
             f.write(uuid + ',' + str(attachement_id) + '\n')
 
-    def get_cached_files(self):
+    def save_recording_info(self, uuid, tag):
+        rec = self.get_recording_info()
+
+        if uuid not in rec:
+            writepath = current_dir + 'rec_' + str(datetime.date.today())
+            now = datetime.datetime.now()
+            dt_string = now.strftime("%d/%m/%Y-%H:%M:%S")
+            mode = 'a' if os.path.exists(writepath) else 'w'
+            with open(writepath, mode) as f:
+                f.write(tag + ',' + uuid + ',' + dt_string +'\n')
+
+    def get_recording_info(self):
+        path = current_dir + 'rec_' + str(datetime.date.today())
+        dictionary = {}
+        if os.path.exists(path):
+            with open(path, 'r') as file:
+                lines = file.readlines()
+                for line in lines:
+                    line = line.strip()
+                    data = line.split(",")
+                    dictionary[data[1]] = [data[0], data[2]]
+
+        logging.info("\n %s", dictionary)
+        return dictionary
+
+    def get_cached_files(self, prefix):
         filenames = next(walk(current_dir), (None, None, []))[2]
-        prefix = 'call_'
         files = filter(lambda x: x.startswith(prefix), filenames)
         return list(files)
 
     def get_attachments_from_uuid(self, uuids):
-        calls = self.get_cached_files()
+        calls = self.get_cached_files('call_')
         dictionary = {}
         for f in calls:
             with open(current_dir + f, 'r') as file:
@@ -98,11 +122,12 @@ class S(BaseHTTPRequestHandler):
                 siteconfig.API_KEY,
                 token = token
             )
-        attachments = []
+        attachments = {}
+
         for attachment_id, call_id in call_attachment_dict.items():
             time.sleep(0.100)
             resp = e_client.get(f'/api/v1r1/enterprise/calls/{call_id}/attachments/{attachment_id}')
-            attachments.append({"uuid": resp.get("uuid"), "url": resp.get("signed_url")})
+            attachments[resp.get("uuid")] = resp.get("signed_url")
 
         return attachments
 
@@ -134,16 +159,33 @@ class S(BaseHTTPRequestHandler):
             self.save_data(call_id, uuid, attachement_id)
 
 
-        if type == "download":
-            uuids = call_data.get("uuids")
+        if type == "load":
+            local_rec = self.get_recording_info()
+            uuids = []
+            for x in local_rec.keys():
+                uuids.append(x)
+
             call_attachment_dict = self.get_attachments_from_uuid(uuids)
             attachments = self.get_call_attachments(call_attachment_dict)
-            response = json.dumps(attachments)
+            data = []
+            for x in local_rec.keys():
+                url = attachments.get(x, "")
+                name = local_rec[x][0]
+                time = local_rec[x][1]
+                data.append({"uuid": x, "url": url, "name": name, "time": time})
+
+            response = json.dumps(data)
+
+        if type == "start_recording":
+            uuid = call_data.get("uuid")
+            tag = call_data.get("tag")
+            self.save_recording_info(uuid, tag)
 
         if type == "reset":
-            files = self.get_cached_files()
+            files = self.get_cached_files('call_') + self.get_cached_files('rec_')
             for f in files:
                 os.remove(current_dir + f)
+            response = []
 
         self._set_response()
         self.send_header('Content-Type', 'application/json')
